@@ -39,6 +39,16 @@ const (
 	FernetKeysHash = "fernetkeys"
 )
 
+// TLSSpec defines the TLS options
+type TLSSpec struct {
+	// +kubebuilder:validation:Optional
+	// Secret in the same namespace containing the server private key (tls.key) and public cert (tls.crt) for TLS
+	SecretName string `json:"secretName,omitempty"`
+	// +kubebuilder:validation:Optional
+	// Secret in the same namespace containing the CA cert (ca.crt) for client certificate validation
+	CaSecretName string `json:"caSecretName,omitempty"`
+}
+
 // KeystoneAPISpec defines the desired state of KeystoneAPI
 type KeystoneAPISpec struct {
 	// +kubebuilder:validation:Required
@@ -146,6 +156,9 @@ type KeystoneAPISpec struct {
 	// +kubebuilder:validation:Optional
 	// ExternalEndpoints, expose a VIP using a pre-created IPAddressPool
 	ExternalEndpoints []MetalLBConfig `json:"externalEndpoints,omitempty"`
+
+	// +kubebuilder:validation:Optional
+	TLS TLSSpec `json:"tls,omitempty"`
 }
 
 // MetalLBConfig to configure the MetalLB loadbalancer service

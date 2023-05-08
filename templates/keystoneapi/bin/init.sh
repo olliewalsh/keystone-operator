@@ -38,4 +38,4 @@ for dir in /var/lib/config-data/default;do
 done
 
 # set secrets
-crudini --set ${SVC_CFG_MERGED} database connection mysql+pymysql://${DBUSER}:${DBPASSWORD}@${DBHOST}/${DB}
+crudini --set ${SVC_CFG_MERGED} database connection mysql+pymysql://${DBUSER}:${DBPASSWORD}@${DBHOST}/${DB}'?ssl=1&ssl_ca=/var/lib/tlsca-data/ca.crt'

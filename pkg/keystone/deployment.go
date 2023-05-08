@@ -106,7 +106,7 @@ func Deployment(
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: instance.RbacResourceName(),
-					Volumes:            getVolumes(instance.Name),
+					Volumes:            getVolumes(instance),
 					Containers: []corev1.Container{
 						{
 							Name: ServiceName + "-api",
@@ -119,7 +119,7 @@ func Deployment(
 								RunAsUser: &runAsUser,
 							},
 							Env:            env.MergeEnvs([]corev1.EnvVar{}, envVars),
-							VolumeMounts:   getVolumeMounts(),
+							VolumeMounts:   getVolumeMounts(instance),
 							Resources:      instance.Spec.Resources,
 							ReadinessProbe: readinessProbe,
 							LivenessProbe:  livenessProbe,

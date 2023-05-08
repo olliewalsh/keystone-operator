@@ -104,7 +104,7 @@ func BootstrapJob(
 									},
 								},
 							},
-							VolumeMounts: getVolumeMounts(),
+							VolumeMounts: getVolumeMounts(instance),
 						},
 					},
 				},
@@ -112,7 +112,7 @@ func BootstrapJob(
 		},
 	}
 	job.Spec.Template.Spec.Containers[0].Env = env.MergeEnvs(job.Spec.Template.Spec.Containers[0].Env, envVars)
-	job.Spec.Template.Spec.Volumes = getVolumes(instance.Name)
+	job.Spec.Template.Spec.Volumes = getVolumes(instance)
 
 	initContainerDetails := APIDetails{
 		ContainerImage:       instance.Spec.ContainerImage,

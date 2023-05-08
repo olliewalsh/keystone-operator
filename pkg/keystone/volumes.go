@@ -16,22 +16,25 @@ limitations under the License.
 package keystone
 
 import (
+	keystonev1 "github.com/openstack-k8s-operators/keystone-operator/api/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 )
 
 // getVolumes - service volumes
-func getVolumes(name string) []corev1.Volume {
+func getVolumes(instance *keystonev1.KeystoneAPI) []corev1.Volume {
 	var scriptsVolumeDefaultMode int32 = 0755
+	var config0644AccessMode int32 = 0644
 	var config0640AccessMode int32 = 0640
+	var config0600AccessMode int32 = 0600
 
-	return []corev1.Volume{
+	var volumes = []corev1.Volume{
 		{
 			Name: "scripts",
 			VolumeSource: corev1.VolumeSource{
 				ConfigMap: &corev1.ConfigMapVolumeSource{
 					DefaultMode: &scriptsVolumeDefaultMode,
 					LocalObjectReference: corev1.LocalObjectReference{
-						Name: name + "-scripts",
+						Name: instance.Name + "-scripts",
 					},
 				},
 			},
@@ -42,7 +45,7 @@ func getVolumes(name string) []corev1.Volume {
 				ConfigMap: &corev1.ConfigMapVolumeSource{
 					DefaultMode: &config0640AccessMode,
 					LocalObjectReference: corev1.LocalObjectReference{
-						Name: name + "-config-data",
+						Name: instance.Name + "-config-data",
 					},
 				},
 			},
@@ -91,11 +94,42 @@ func getVolumes(name string) []corev1.Volume {
 		},
 	}
 
+	if instance.Spec.TLS.SecretName != "" {
+		volumes = append(
+			volumes,
+			corev1.Volume{
+				Name: "tls-secret",
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						DefaultMode: &config0600AccessMode,
+						SecretName:  instance.Spec.TLS.SecretName,
+					},
+				},
+			},
+		)
+	}
+
+	if instance.Spec.TLS.CaSecretName != "" {
+		volumes = append(
+			volumes,
+			corev1.Volume{
+				Name: "tlsca-secret",
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						DefaultMode: &config0644AccessMode,
+						SecretName:  instance.Spec.TLS.CaSecretName,
+					},
+				},
+			},
+		)
+	}
+
+	return volumes
 }
 
 // getInitVolumeMounts - general init task VolumeMounts
 func getInitVolumeMounts() []corev1.VolumeMount {
-	return []corev1.VolumeMount{
+	var volumeMounts = []corev1.VolumeMount{
 		{
 			Name:      "scripts",
 			MountPath: "/usr/local/bin/container-scripts",
@@ -112,11 +146,13 @@ func getInitVolumeMounts() []corev1.VolumeMount {
 			ReadOnly:  false,
 		},
 	}
+
+	return volumeMounts
 }
 
 // getVolumeMounts - general VolumeMounts
-func getVolumeMounts() []corev1.VolumeMount {
-	return []corev1.VolumeMount{
+func getVolumeMounts(instance *keystonev1.KeystoneAPI) []corev1.VolumeMount {
+	var volumeMounts = []corev1.VolumeMount{
 		{
 			Name:      "scripts",
 			MountPath: "/usr/local/bin/container-scripts",
@@ -138,4 +174,28 @@ func getVolumeMounts() []corev1.VolumeMount {
 			Name:      "credential-keys",
 		},
 	}
+
+	if instance.Spec.TLS.SecretName != "" {
+		volumeMounts = append(
+			volumeMounts,
+			corev1.VolumeMount{
+				Name:      "tls-secret",
+				MountPath: "/var/lib/tls-data",
+				ReadOnly:  true,
+			},
+		)
+	}
+
+	if instance.Spec.TLS.CaSecretName != "" {
+		volumeMounts = append(
+			volumeMounts,
+			corev1.VolumeMount{
+				Name:      "tlsca-secret",
+				MountPath: "/var/lib/tlsca-data",
+				ReadOnly:  true,
+			},
+		)
+	}
+
+	return volumeMounts
 }
