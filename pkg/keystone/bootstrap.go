@@ -122,7 +122,7 @@ func BootstrapJob(
 		OSPSecret:            instance.Spec.Secret,
 		DBPasswordSelector:   instance.Spec.PasswordSelectors.Database,
 		UserPasswordSelector: instance.Spec.PasswordSelectors.Admin,
-		VolumeMounts:         getInitVolumeMounts(),
+		VolumeMounts:         getInitVolumeMounts(instance),
 	}
 	job.Spec.Template.Spec.InitContainers = initContainer(initContainerDetails)
 

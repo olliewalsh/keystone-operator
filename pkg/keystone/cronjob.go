@@ -107,7 +107,7 @@ func CronJob(
 		OSPSecret:            instance.Spec.Secret,
 		DBPasswordSelector:   instance.Spec.PasswordSelectors.Database,
 		UserPasswordSelector: instance.Spec.PasswordSelectors.Admin,
-		VolumeMounts:         getInitVolumeMounts(),
+		VolumeMounts:         getInitVolumeMounts(instance),
 	}
 	cronjob.Spec.JobTemplate.Spec.Template.Spec.InitContainers = initContainer(initContainerDetails)
 

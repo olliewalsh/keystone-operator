@@ -38,4 +38,15 @@ for dir in /var/lib/config-data/default;do
 done
 
 # set secrets
-crudini --set ${SVC_CFG_MERGED} database connection mysql+pymysql://${DBUSER}:${DBPASSWORD}@${DBHOST}/${DB}'?ssl=1&ssl_ca=/var/lib/tlsca-data/ca.crt'
+if [[ -e /var/lib/tlsdb-data/ca.crt ]]; then
+    DB_QS='?ssl=1&ssl_ca=/var/lib/tlsdb-data/ca.crt'
+    if [[ -e /var/lib/tlsdb-data/tls.key && -e /var/lib/tlsdb-data/tls.crt ]]; then
+        DBUSER=${DBUSER}_tls
+        DB_QS=${DB_QS}'&ssl_key=/var/lib/tlsdb-data/tls.key&ssl_cert=/var/lib/tlsdb-data/tls.crt'
+    fi
+    DB_URI=mysql+pymysql://${DBUSER}@${DBHOST}/${DB}${DB_QS}
+else
+    DB_URI=mysql+pymysql://${DBUSER}:${DBPASSWORD}@${DBHOST}/${DB}
+fi
+
+crudini --set ${SVC_CFG_MERGED} database connection ${DB_URI}

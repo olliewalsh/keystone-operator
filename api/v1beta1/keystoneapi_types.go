@@ -42,6 +42,9 @@ const (
 // TLSSpec defines the TLS options
 type TLSSpec struct {
 	// +kubebuilder:validation:Optional
+	// Secret in the same namespace containing the datbase client private key (tls.key) and public cert (tls.crt) for TLS
+	DatabaseSecretName string `json:"databaseSecretName,omitempty"`
+	// +kubebuilder:validation:Optional
 	// Secret in the same namespace containing the server private key (tls.key) and public cert (tls.crt) for TLS
 	SecretName string `json:"secretName,omitempty"`
 	// +kubebuilder:validation:Optional

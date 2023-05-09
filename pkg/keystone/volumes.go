@@ -94,6 +94,21 @@ func getVolumes(instance *keystonev1.KeystoneAPI) []corev1.Volume {
 		},
 	}
 
+	if instance.Spec.TLS.DatabaseSecretName != "" {
+		volumes = append(
+			volumes,
+			corev1.Volume{
+				Name: "tlsdb-secret",
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						DefaultMode: &config0644AccessMode,
+						SecretName:  instance.Spec.TLS.DatabaseSecretName,
+					},
+				},
+			},
+		)
+	}
+
 	if instance.Spec.TLS.SecretName != "" {
 		volumes = append(
 			volumes,
@@ -128,7 +143,7 @@ func getVolumes(instance *keystonev1.KeystoneAPI) []corev1.Volume {
 }
 
 // getInitVolumeMounts - general init task VolumeMounts
-func getInitVolumeMounts() []corev1.VolumeMount {
+func getInitVolumeMounts(instance *keystonev1.KeystoneAPI) []corev1.VolumeMount {
 	var volumeMounts = []corev1.VolumeMount{
 		{
 			Name:      "scripts",
@@ -145,6 +160,17 @@ func getInitVolumeMounts() []corev1.VolumeMount {
 			MountPath: "/var/lib/config-data/merged",
 			ReadOnly:  false,
 		},
+	}
+
+	if instance.Spec.TLS.DatabaseSecretName != "" {
+		volumeMounts = append(
+			volumeMounts,
+			corev1.VolumeMount{
+				Name:      "tlsdb-secret",
+				MountPath: "/var/lib/tlsdb-data",
+				ReadOnly:  true,
+			},
+		)
 	}
 
 	return volumeMounts
@@ -173,6 +199,17 @@ func getVolumeMounts(instance *keystonev1.KeystoneAPI) []corev1.VolumeMount {
 			ReadOnly:  true,
 			Name:      "credential-keys",
 		},
+	}
+
+	if instance.Spec.TLS.DatabaseSecretName != "" {
+		volumeMounts = append(
+			volumeMounts,
+			corev1.VolumeMount{
+				Name:      "tlsdb-secret",
+				MountPath: "/var/lib/tlsdb-data",
+				ReadOnly:  true,
+			},
+		)
 	}
 
 	if instance.Spec.TLS.SecretName != "" {
