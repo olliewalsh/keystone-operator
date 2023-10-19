@@ -323,6 +323,9 @@ func (r *KeystoneAPIReconciler) reconcileInit(
 	helper *helper.Helper,
 	serviceLabels map[string]string,
 	serviceAnnotations map[string]string,
+	ospSecret *corev1.Secret,
+	secretVars map[string]env.Setter,
+	memcached *memcachedv1.Memcached,
 ) (ctrl.Result, error) {
 	l := GetLog(ctx)
 	l.Info("Reconciling Service init")
@@ -330,12 +333,6 @@ func (r *KeystoneAPIReconciler) reconcileInit(
 	// Service account, role, binding
 	//
 	rbacRules := []rbacv1.PolicyRule{
-		{
-			APIGroups:     []string{"security.openshift.io"},
-			ResourceNames: []string{"anyuid"},
-			Resources:     []string{"securitycontextconstraints"},
-			Verbs:         []string{"use"},
-		},
 		{
 			APIGroups: []string{""},
 			Resources: []string{"pods"},
@@ -407,6 +404,65 @@ func (r *KeystoneAPIReconciler) reconcileInit(
 	instance.Status.Conditions.MarkTrue(condition.DBReadyCondition, condition.DBReadyMessage)
 
 	// create service DB - end
+
+	//
+	// Create ConfigMaps and Secrets required as input for the Service and calculate an overall hash of hashes
+	//
+
+	//
+	// create Configmap required for keystone input
+	// - %-scripts configmap holding scripts to e.g. bootstrap the service
+	// - %-config configmap holding minimal keystone config required to get the service up, user can add additional files to be added to the service
+	// - parameters which has passwords gets added from the OpenStack secret via the init container
+	//
+	err = r.generateServiceSecrets(ctx, instance, helper, ospSecret, &secretVars, memcached)
+	if err != nil {
+		instance.Status.Conditions.Set(condition.FalseCondition(
+			condition.ServiceConfigReadyCondition,
+			condition.ErrorReason,
+			condition.SeverityWarning,
+			condition.ServiceConfigReadyErrorMessage,
+			err.Error()))
+		return ctrl.Result{}, err
+	}
+
+	//
+	// Create secret holding fernet keys (for token and credential)
+	//
+	// TODO key rotation
+	err = r.ensureFernetKeys(ctx, instance, helper, &secretVars)
+	if err != nil {
+		instance.Status.Conditions.Set(condition.FalseCondition(
+			condition.ServiceConfigReadyCondition,
+			condition.ErrorReason,
+			condition.SeverityWarning,
+			condition.ServiceConfigReadyErrorMessage,
+			err.Error()))
+		return ctrl.Result{}, err
+	}
+
+	//
+	// create hash over all the different input resources to identify if any those changed
+	// and a restart/recreate is required.
+	//
+	hashChanged, err := r.createHashOfInputHashes(ctx, instance, secretVars)
+	if err != nil {
+		instance.Status.Conditions.Set(condition.FalseCondition(
+			condition.ServiceConfigReadyCondition,
+			condition.ErrorReason,
+			condition.SeverityWarning,
+			condition.ServiceConfigReadyErrorMessage,
+			err.Error()))
+		return ctrl.Result{}, err
+	} else if hashChanged {
+		// Hash changed and instance status should be updated (which will be done by main defer func),
+		// so we need to return and reconcile again
+		return ctrl.Result{}, nil
+	}
+
+	instance.Status.Conditions.MarkTrue(condition.ServiceConfigReadyCondition, condition.ServiceConfigReadyMessage)
+
+	// Create ConfigMaps and Secrets - end
 
 	//
 	// run keystone db sync
@@ -632,8 +688,8 @@ func (r *KeystoneAPIReconciler) reconcileNormal(ctx context.Context, instance *k
 	l := GetLog(ctx)
 	l.Info("Reconciling Service")
 
-	// ConfigMap
-	configMapVars := make(map[string]env.Setter)
+	// Config Secrets
+	secretVars := make(map[string]env.Setter)
 
 	//
 	// check for required OpenStack secret holding passwords for service/admin user and add hash to the vars map
@@ -656,7 +712,7 @@ func (r *KeystoneAPIReconciler) reconcileNormal(ctx context.Context, instance *k
 			err.Error()))
 		return ctrl.Result{}, err
 	}
-	configMapVars[ospSecret.Name] = env.SetValue(hash)
+	secretVars[ospSecret.Name] = env.SetValue(hash)
 
 	instance.Status.Conditions.MarkTrue(condition.InputReadyCondition, condition.InputReadyMessage)
 
@@ -713,59 +769,6 @@ func (r *KeystoneAPIReconciler) reconcileNormal(ctx context.Context, instance *k
 	// run check memcached - end
 
 	//
-	// Create ConfigMaps and Secrets required as input for the Service and calculate an overall hash of hashes
-	//
-
-	//
-	// create Configmap required for keystone input
-	// - %-scripts configmap holding scripts to e.g. bootstrap the service
-	// - %-config configmap holding minimal keystone config required to get the service up, user can add additional files to be added to the service
-	// - parameters which has passwords gets added from the OpenStack secret via the init container
-	//
-	err = r.generateServiceConfigMaps(ctx, instance, helper, &configMapVars, memcached)
-	if err != nil {
-		instance.Status.Conditions.Set(condition.FalseCondition(
-			condition.ServiceConfigReadyCondition,
-			condition.ErrorReason,
-			condition.SeverityWarning,
-			condition.ServiceConfigReadyErrorMessage,
-			err.Error()))
-		return ctrl.Result{}, err
-	}
-
-	//
-	// Create secret holding fernet keys (for token and credential)
-	//
-	// TODO key rotation
-	err = r.ensureFernetKeys(ctx, instance, helper, &configMapVars)
-	if err != nil {
-		instance.Status.Conditions.Set(condition.FalseCondition(
-			condition.ServiceConfigReadyCondition,
-			condition.ErrorReason,
-			condition.SeverityWarning,
-			condition.ServiceConfigReadyErrorMessage,
-			err.Error()))
-		return ctrl.Result{}, err
-	}
-
-	//
-	// create hash over all the different input resources to identify if any those changed
-	// and a restart/recreate is required.
-	//
-	inputHash, hashChanged, err := r.createHashOfInputHashes(ctx, instance, configMapVars)
-	if err != nil {
-		return ctrl.Result{}, err
-	} else if hashChanged {
-		// Hash changed and instance status should be updated (which will be done by main defer func),
-		// so we need to return and reconcile again
-		return ctrl.Result{}, nil
-	}
-
-	instance.Status.Conditions.MarkTrue(condition.ServiceConfigReadyCondition, condition.ServiceConfigReadyMessage)
-
-	// Create ConfigMaps and Secrets - end
-
-	//
 	// TODO check when/if Init, Update, or Upgrade should/could be skipped
 	//
 
@@ -803,7 +806,7 @@ func (r *KeystoneAPIReconciler) reconcileNormal(ctx context.Context, instance *k
 	}
 
 	// Handle service init
-	ctrlResult, err := r.reconcileInit(ctx, instance, helper, serviceLabels, serviceAnnotations)
+	ctrlResult, err := r.reconcileInit(ctx, instance, helper, serviceLabels, serviceAnnotations, ospSecret, secretVars, memcached)
 	if err != nil {
 		return ctrlResult, err
 	} else if (ctrlResult != ctrl.Result{}) {
@@ -831,6 +834,10 @@ func (r *KeystoneAPIReconciler) reconcileNormal(ctx context.Context, instance *k
 	//
 
 	// Define a new Deployment object
+	inputHash, ok := instance.Status.Hash[common.InputHashName]
+	if !ok {
+		return ctrlResult, fmt.Errorf("Failed to fetch input hash for Keystone deployment")
+	}
 	deplDef := keystone.Deployment(instance, inputHash, serviceLabels, serviceAnnotations)
 	depl := deployment.NewDeployment(
 		deplDef,
@@ -921,21 +928,17 @@ func (r *KeystoneAPIReconciler) reconcileNormal(ctx context.Context, instance *k
 	return ctrl.Result{}, nil
 }
 
-// generateServiceConfigMaps - create create configmaps which hold scripts and service configuration
-// TODO add DefaultConfigOverwrite
-func (r *KeystoneAPIReconciler) generateServiceConfigMaps(
+// generateServiceSecrets - create secrets woth service configuration
+func (r *KeystoneAPIReconciler) generateServiceSecrets(
 	ctx context.Context,
 	instance *keystonev1.KeystoneAPI,
 	h *helper.Helper,
+	ospSecret *corev1.Secret,
 	envVars *map[string]env.Setter,
 	mc *memcachedv1.Memcached,
 ) error {
 	//
 	// create Configmap/Secret required for keystone input
-	// - %-scripts configmap holding scripts to e.g. bootstrap the service
-	// - %-config configmap holding minimal keystone config required to get the service up, user can add additional files to be added to the service
-	// - parameters which has passwords gets added from the ospSecret via the init container
-	//
 
 	cmLabels := labels.GetLabels(instance, labels.GetGroupLabel(keystone.ServiceName), map[string]string{})
 
@@ -950,21 +953,15 @@ func (r *KeystoneAPIReconciler) generateServiceConfigMaps(
 
 	templateParameters := map[string]interface{}{
 		"memcachedServers": strings.Join(mc.Status.ServerList, ","),
+		"DatabaseHost":     instance.Status.DatabaseHostname,
+		"DatabaseUser":     instance.Spec.DatabaseUser,
+		"DatabasePassword": string(ospSecret.Data[instance.Spec.PasswordSelectors.Database]),
+		"DatabaseName":     keystone.DatabaseName,
 	}
 
-	cms := []util.Template{
-		// ScriptsConfigMap
+	secrets := []util.Template{
 		{
-			Name:               fmt.Sprintf("%s-scripts", instance.Name),
-			Namespace:          instance.Namespace,
-			Type:               util.TemplateTypeScripts,
-			InstanceType:       instance.Kind,
-			AdditionalTemplate: map[string]string{"common.sh": "/common/common.sh"},
-			Labels:             cmLabels,
-		},
-		// ConfigMap
-		{
-			Name:          fmt.Sprintf("%s-config-data", instance.Name),
+			Name:          fmt.Sprintf("%s-config", instance.Name),
 			Namespace:     instance.Namespace,
 			Type:          util.TemplateTypeConfig,
 			InstanceType:  instance.Kind,
@@ -972,8 +969,15 @@ func (r *KeystoneAPIReconciler) generateServiceConfigMaps(
 			ConfigOptions: templateParameters,
 			Labels:        cmLabels,
 		},
+		{
+			Name:         fmt.Sprintf("%s-apache-config", instance.Name),
+			Namespace:    instance.Namespace,
+			Type:         util.TemplateTypeConfig,
+			InstanceType: "apache",
+			Labels:       cmLabels,
+		},
 	}
-	return configmap.EnsureConfigMaps(ctx, h, instance, cms, envVars)
+	return oko_secret.EnsureSecrets(ctx, h, instance, secrets, envVars)
 }
 
 // reconcileConfigMap -  creates clouds.yaml
@@ -1114,24 +1118,24 @@ func (r *KeystoneAPIReconciler) ensureFernetKeys(
 // createHashOfInputHashes - creates a hash of hashes which gets added to the resources which requires a restart
 // if any of the input resources change, like configs, passwords, ...
 //
-// returns the hash, whether the hash changed (as a bool) and any error
+// returns whether the hash changed (as a bool) and any error
 func (r *KeystoneAPIReconciler) createHashOfInputHashes(
 	ctx context.Context,
 	instance *keystonev1.KeystoneAPI,
 	envVars map[string]env.Setter,
-) (string, bool, error) {
+) (bool, error) {
 	var hashMap map[string]string
 	changed := false
 	mergedMapVars := env.MergeEnvs([]corev1.EnvVar{}, envVars)
 	hash, err := util.ObjectHash(mergedMapVars)
 	if err != nil {
-		return hash, changed, err
+		return changed, err
 	}
 	if hashMap, changed = util.SetHash(instance.Status.Hash, common.InputHashName, hash); changed {
 		instance.Status.Hash = hashMap
 		GetLog(ctx).Info(fmt.Sprintf("Input maps hash %s - %s", common.InputHashName, hash))
 	}
-	return hash, changed, nil
+	return changed, nil
 }
 
 // getKeystoneMemcached - gets the Memcached instance used for keystone cache backend

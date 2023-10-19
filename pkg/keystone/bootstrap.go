@@ -18,16 +18,11 @@ package keystone
 import (
 	keystonev1 "github.com/openstack-k8s-operators/keystone-operator/api/v1beta1"
 
-	common "github.com/openstack-k8s-operators/lib-common/modules/common"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/env"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-)
-
-const (
-	// BootstrapCommand -
-	BootstrapCommand = "/usr/local/bin/kolla_set_configs && keystone-manage bootstrap"
+	"k8s.io/utils/ptr"
 )
 
 // BootstrapJob func
@@ -37,18 +32,18 @@ func BootstrapJob(
 	annotations map[string]string,
 	endpoints map[string]string,
 ) *batchv1.Job {
-	runAsUser := int64(0)
 
-	args := []string{"-c"}
-	if instance.Spec.Debug.Bootstrap {
-		args = append(args, common.DebugCommand)
-	} else {
-		args = append(args, BootstrapCommand)
+	entrypoint := []string{
+		"dumb-init",
+		"--single-child",
+		"--",
+	}
+	command := []string{
+		"/usr/bin/keystone-manage",
+		"bootstrap",
 	}
 
 	envVars := map[string]env.Setter{}
-	envVars["KOLLA_CONFIG_STRATEGY"] = env.SetValue("COPY_ALWAYS")
-	envVars["KOLLA_BOOTSTRAP"] = env.SetValue("true")
 	envVars["OS_BOOTSTRAP_USERNAME"] = env.SetValue(instance.Spec.AdminUser)
 	envVars["OS_BOOTSTRAP_PROJECT_NAME"] = env.SetValue(instance.Spec.AdminProject)
 	envVars["OS_BOOTSTRAP_SERVICE_NAME"] = env.SetValue(ServiceName)
@@ -78,51 +73,48 @@ func BootstrapJob(
 				Spec: corev1.PodSpec{
 					RestartPolicy:      corev1.RestartPolicyOnFailure,
 					ServiceAccountName: instance.RbacResourceName(),
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsNonRoot: ptr.To(true),
+						SeccompProfile: &corev1.SeccompProfile{
+							Type: corev1.SeccompProfileTypeRuntimeDefault,
+						},
+					},
+					Volumes: getVolumes(instance.Name),
 					Containers: []corev1.Container{
 						{
-							Name:  ServiceName + "-bootstrap",
-							Image: instance.Spec.ContainerImage,
-							Command: []string{
-								"/bin/bash",
-							},
-							Args: args,
-							SecurityContext: &corev1.SecurityContext{
-								RunAsUser: &runAsUser,
-							},
-							Env: []corev1.EnvVar{
-								{
-									Name: "OS_BOOTSTRAP_PASSWORD",
-									ValueFrom: &corev1.EnvVarSource{
-										SecretKeyRef: &corev1.SecretKeySelector{
-											LocalObjectReference: corev1.LocalObjectReference{
-												Name: instance.Spec.Secret,
+							Name:    ServiceName + "-bootstrap",
+							Image:   instance.Spec.ContainerImage,
+							Command: entrypoint,
+							Args:    command,
+							Env: env.MergeEnvs(
+								[]corev1.EnvVar{
+									{
+										Name: "OS_BOOTSTRAP_PASSWORD",
+										ValueFrom: &corev1.EnvVarSource{
+											SecretKeyRef: &corev1.SecretKeySelector{
+												LocalObjectReference: corev1.LocalObjectReference{
+													Name: instance.Spec.Secret,
+												},
+												Key: "AdminPassword",
 											},
-											Key: "AdminPassword",
 										},
 									},
 								},
-							},
+								envVars,
+							),
 							VolumeMounts: getVolumeMounts(),
+							SecurityContext: &corev1.SecurityContext{
+								AllowPrivilegeEscalation: ptr.To(false),
+								Capabilities: &corev1.Capabilities{
+									Drop: []corev1.Capability{"ALL"},
+								},
+							},
 						},
 					},
 				},
 			},
 		},
 	}
-	job.Spec.Template.Spec.Containers[0].Env = env.MergeEnvs(job.Spec.Template.Spec.Containers[0].Env, envVars)
-	job.Spec.Template.Spec.Volumes = getVolumes(instance.Name)
-
-	initContainerDetails := APIDetails{
-		ContainerImage:       instance.Spec.ContainerImage,
-		DatabaseHost:         instance.Status.DatabaseHostname,
-		DatabaseUser:         instance.Spec.DatabaseUser,
-		DatabaseName:         DatabaseName,
-		OSPSecret:            instance.Spec.Secret,
-		DBPasswordSelector:   instance.Spec.PasswordSelectors.Database,
-		UserPasswordSelector: instance.Spec.PasswordSelectors.Admin,
-		VolumeMounts:         getInitVolumeMounts(),
-	}
-	job.Spec.Template.Spec.InitContainers = initContainer(initContainerDetails)
 
 	return job
 }

@@ -17,17 +17,11 @@ package keystone
 
 import (
 	keystonev1 "github.com/openstack-k8s-operators/keystone-operator/api/v1beta1"
-	common "github.com/openstack-k8s-operators/lib-common/modules/common"
-	"github.com/openstack-k8s-operators/lib-common/modules/common/env"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-)
-
-const (
-	// TrustFlushCommand -
-	TrustFlushCommand = "/usr/local/bin/kolla_set_configs && keystone-manage trust_flush"
+	"k8s.io/utils/ptr"
 )
 
 // CronJob func
@@ -36,20 +30,16 @@ func CronJob(
 	labels map[string]string,
 	annotations map[string]string,
 ) *batchv1.CronJob {
-	runAsUser := int64(0)
 
-	args := []string{"-c"}
-	if instance.Spec.Debug.Service {
-		args = append(args, common.DebugCommand)
-	} else {
-		args = append(args, TrustFlushCommand+instance.Spec.TrustFlushArgs)
+	entrypoint := []string{
+		"dumb-init",
+		"--single-child",
+		"--",
 	}
-
-	envVars := map[string]env.Setter{}
-	envVars["KOLLA_CONFIG_STRATEGY"] = env.SetValue("COPY_ALWAYS")
-
-	parallelism := int32(1)
-	completions := int32(1)
+	command := []string{
+		"/usr/bin/keystone-manage",
+		"trust_flush",
+	}
 
 	cronjob := &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{
@@ -66,28 +56,34 @@ func CronJob(
 					Labels:      labels,
 				},
 				Spec: batchv1.JobSpec{
-					Parallelism: &parallelism,
-					Completions: &completions,
+					Parallelism: ptr.To(int32(1)),
+					Completions: ptr.To(int32(1)),
 					Template: corev1.PodTemplateSpec{
 						Spec: corev1.PodSpec{
 							Containers: []corev1.Container{
 								{
-									Name:  ServiceName + "-cron",
-									Image: instance.Spec.ContainerImage,
-									Command: []string{
-										"/bin/bash",
-									},
-									Args:         args,
-									Env:          env.MergeEnvs([]corev1.EnvVar{}, envVars),
+									Name:         ServiceName + "-cron",
+									Image:        instance.Spec.ContainerImage,
+									Command:      entrypoint,
+									Args:         command,
 									VolumeMounts: getVolumeMounts(),
 									SecurityContext: &corev1.SecurityContext{
-										RunAsUser: &runAsUser,
+										AllowPrivilegeEscalation: ptr.To(false),
+										Capabilities: &corev1.Capabilities{
+											Drop: []corev1.Capability{"ALL"},
+										},
 									},
 								},
 							},
-							Volumes:            getVolumes(instance.Name),
-							RestartPolicy:      corev1.RestartPolicyNever,
+							RestartPolicy: corev1.RestartPolicyNever,
+							SecurityContext: &corev1.PodSecurityContext{
+								RunAsNonRoot: ptr.To(true),
+								SeccompProfile: &corev1.SeccompProfile{
+									Type: corev1.SeccompProfileTypeRuntimeDefault,
+								},
+							},
 							ServiceAccountName: instance.RbacResourceName(),
+							Volumes:            getVolumes(instance.Name),
 						},
 					},
 				},
@@ -97,18 +93,6 @@ func CronJob(
 	if instance.Spec.NodeSelector != nil && len(instance.Spec.NodeSelector) > 0 {
 		cronjob.Spec.JobTemplate.Spec.Template.Spec.NodeSelector = instance.Spec.NodeSelector
 	}
-
-	initContainerDetails := APIDetails{
-		ContainerImage:       instance.Spec.ContainerImage,
-		DatabaseHost:         instance.Status.DatabaseHostname,
-		DatabaseUser:         instance.Spec.DatabaseUser,
-		DatabaseName:         DatabaseName,
-		OSPSecret:            instance.Spec.Secret,
-		DBPasswordSelector:   instance.Spec.PasswordSelectors.Database,
-		UserPasswordSelector: instance.Spec.PasswordSelectors.Admin,
-		VolumeMounts:         getInitVolumeMounts(),
-	}
-	cronjob.Spec.JobTemplate.Spec.Template.Spec.InitContainers = initContainer(initContainerDetails)
 
 	return cronjob
 }

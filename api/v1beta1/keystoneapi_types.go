@@ -43,7 +43,7 @@ const (
 	// Container image fall-back defaults
 
 	// KeystoneAPIContainerImage is the fall-back container image for KeystoneAPI
-	KeystoneAPIContainerImage = "quay.io/podified-antelope-centos9/openstack-keystone:current-podified"
+	KeystoneAPIContainerImage = "quay.io/olliewalsh/openstack-keystone-rootless:rootless"
 )
 
 // KeystoneAPISpec defines the desired state of KeystoneAPI

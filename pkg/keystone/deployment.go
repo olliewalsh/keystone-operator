@@ -25,11 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
-)
-
-const (
-	// ServiceCommand -
-	ServiceCommand = "/usr/local/bin/kolla_set_configs && /usr/local/bin/kolla_start"
+	"k8s.io/utils/ptr"
 )
 
 // Deployment func
@@ -39,7 +35,6 @@ func Deployment(
 	labels map[string]string,
 	annotations map[string]string,
 ) *appsv1.Deployment {
-	runAsUser := int64(0)
 
 	livenessProbe := &corev1.Probe{
 		// TODO might need tuning
@@ -54,9 +49,25 @@ func Deployment(
 		InitialDelaySeconds: 5,
 	}
 
-	args := []string{"-c"}
+	entrypoint := []string{
+		"dumb-init",
+		"--single-child",
+		"--rewrite", "15:28",
+		"--",
+	}
+	command := []string{
+		"/sbin/httpd",
+		"-DFOREGROUND",
+	}
 	if instance.Spec.Debug.Service {
-		args = append(args, common.DebugCommand)
+		entrypoint = []string{
+			"dumb-init",
+			"--",
+		}
+		command = []string{
+			"/bin/sleep",
+			"infinity",
+		}
 		livenessProbe.Exec = &corev1.ExecAction{
 			Command: []string{
 				"/bin/true",
@@ -69,8 +80,6 @@ func Deployment(
 			},
 		}
 	} else {
-		args = append(args, ServiceCommand)
-
 		//
 		// https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
 		//
@@ -85,7 +94,6 @@ func Deployment(
 	}
 
 	envVars := map[string]env.Setter{}
-	envVars["KOLLA_CONFIG_STRATEGY"] = env.SetValue("COPY_ALWAYS")
 	envVars["CONFIG_HASH"] = env.SetValue(configHash)
 
 	deployment := &appsv1.Deployment{
@@ -106,22 +114,29 @@ func Deployment(
 				Spec: corev1.PodSpec{
 					ServiceAccountName: instance.RbacResourceName(),
 					Volumes:            getVolumes(instance.Name),
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsNonRoot: ptr.To(true),
+						SeccompProfile: &corev1.SeccompProfile{
+							Type: corev1.SeccompProfileTypeRuntimeDefault,
+						},
+					},
 					Containers: []corev1.Container{
 						{
-							Name: ServiceName + "-api",
-							Command: []string{
-								"/bin/bash",
-							},
-							Args:  args,
-							Image: instance.Spec.ContainerImage,
-							SecurityContext: &corev1.SecurityContext{
-								RunAsUser: &runAsUser,
-							},
+							Name:           ServiceName + "-api",
+							Command:        entrypoint,
+							Args:           command,
+							Image:          instance.Spec.ContainerImage,
 							Env:            env.MergeEnvs([]corev1.EnvVar{}, envVars),
 							VolumeMounts:   getVolumeMounts(),
 							Resources:      instance.Spec.Resources,
 							ReadinessProbe: readinessProbe,
 							LivenessProbe:  livenessProbe,
+							SecurityContext: &corev1.SecurityContext{
+								AllowPrivilegeEscalation: ptr.To(false),
+								Capabilities: &corev1.Capabilities{
+									Drop: []corev1.Capability{"ALL"},
+								},
+							},
 						},
 					},
 				},
@@ -141,18 +156,6 @@ func Deployment(
 	if instance.Spec.NodeSelector != nil && len(instance.Spec.NodeSelector) > 0 {
 		deployment.Spec.Template.Spec.NodeSelector = instance.Spec.NodeSelector
 	}
-
-	initContainerDetails := APIDetails{
-		ContainerImage:       instance.Spec.ContainerImage,
-		DatabaseHost:         instance.Status.DatabaseHostname,
-		DatabaseUser:         instance.Spec.DatabaseUser,
-		DatabaseName:         DatabaseName,
-		OSPSecret:            instance.Spec.Secret,
-		DBPasswordSelector:   instance.Spec.PasswordSelectors.Database,
-		UserPasswordSelector: instance.Spec.PasswordSelectors.Admin,
-		VolumeMounts:         getInitVolumeMounts(),
-	}
-	deployment.Spec.Template.Spec.InitContainers = initContainer(initContainerDetails)
 
 	return deployment
 }

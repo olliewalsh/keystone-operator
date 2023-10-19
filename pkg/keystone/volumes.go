@@ -17,47 +17,37 @@ package keystone
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/utils/ptr"
 )
 
 // getVolumes - service volumes
 func getVolumes(name string) []corev1.Volume {
-	var scriptsVolumeDefaultMode int32 = 0755
-	var config0640AccessMode int32 = 0640
 
 	return []corev1.Volume{
 		{
-			Name: "scripts",
+			Name: "config",
 			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					DefaultMode: &scriptsVolumeDefaultMode,
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: name + "-scripts",
-					},
+				Secret: &corev1.SecretVolumeSource{
+					DefaultMode: ptr.To(int32(0440)),
+					SecretName:  name + "-config",
 				},
 			},
 		},
 		{
-			Name: "config-data",
+			Name: "apache-config",
 			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					DefaultMode: &config0640AccessMode,
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: name + "-config-data",
-					},
+				Secret: &corev1.SecretVolumeSource{
+					DefaultMode: ptr.To(int32(0440)),
+					SecretName:  name + "-apache-config",
 				},
-			},
-		},
-		{
-			Name: "config-data-merged",
-			VolumeSource: corev1.VolumeSource{
-				EmptyDir: &corev1.EmptyDirVolumeSource{Medium: ""},
 			},
 		},
 		{
 			Name: "fernet-keys",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: ServiceName,
+					SecretName:  ServiceName,
+					DefaultMode: ptr.To(int32(0440)),
 					Items: []corev1.KeyToPath{
 						{
 							Key:  "FernetKeys0",
@@ -75,7 +65,8 @@ func getVolumes(name string) []corev1.Volume {
 			Name: "credential-keys",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: ServiceName,
+					SecretName:  ServiceName,
+					DefaultMode: ptr.To(int32(0440)),
 					Items: []corev1.KeyToPath{
 						{
 							Key:  "CredentialKeys0",
@@ -93,55 +84,35 @@ func getVolumes(name string) []corev1.Volume {
 
 }
 
-// getInitVolumeMounts - general init task VolumeMounts
-func getInitVolumeMounts() []corev1.VolumeMount {
-	return []corev1.VolumeMount{
-		{
-			Name:      "scripts",
-			MountPath: "/usr/local/bin/container-scripts",
-			ReadOnly:  true,
-		},
-		{
-			Name:      "config-data",
-			MountPath: "/var/lib/config-data/default",
-			ReadOnly:  true,
-		},
-		{
-			Name:      "config-data-merged",
-			MountPath: "/var/lib/config-data/merged",
-			ReadOnly:  false,
-		},
-	}
-}
-
 // getVolumeMounts - general VolumeMounts
 func getVolumeMounts() []corev1.VolumeMount {
 	return []corev1.VolumeMount{
 		{
-			Name:      "scripts",
-			MountPath: "/usr/local/bin/container-scripts",
-			ReadOnly:  true,
-		},
-		{
-			Name:      "config-data-merged",
-			MountPath: "/var/lib/config-data/merged",
-			ReadOnly:  false,
-		},
-		{
-			Name:      "config-data-merged",
-			MountPath: "/var/lib/kolla/config_files/config.json",
-			SubPath:   "keystone-api-config.json",
-			ReadOnly:  true,
-		},
-		{
-			MountPath: "/var/lib/fernet-keys",
+			MountPath: "/etc/keystone/fernet-keys",
 			ReadOnly:  true,
 			Name:      "fernet-keys",
 		},
 		{
-			MountPath: "/var/lib/credential-keys",
+			MountPath: "/etc/keystone/credential-keys",
 			ReadOnly:  true,
 			Name:      "credential-keys",
+		},
+		{
+			MountPath: "/etc/keystone.conf.d",
+			ReadOnly:  true,
+			Name:      "config",
+		},
+		{
+			MountPath: "/etc/httpd/conf/httpd.conf",
+			ReadOnly:  true,
+			Name:      "apache-config",
+			SubPath:   "httpd.conf",
+		},
+		{
+			MountPath: "/etc/httpd/conf.d/keystone-api.conf",
+			ReadOnly:  true,
+			Name:      "apache-config",
+			SubPath:   "keystone-api.conf",
 		},
 	}
 }

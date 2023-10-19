@@ -18,16 +18,11 @@ package keystone
 import (
 	keystonev1 "github.com/openstack-k8s-operators/keystone-operator/api/v1beta1"
 
-	common "github.com/openstack-k8s-operators/lib-common/modules/common"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/env"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-)
-
-const (
-	// DBSyncCommand -
-	DBSyncCommand = "/usr/local/bin/kolla_set_configs && /usr/local/bin/kolla_start"
+	"k8s.io/utils/ptr"
 )
 
 // DbSyncJob func
@@ -36,18 +31,24 @@ func DbSyncJob(
 	labels map[string]string,
 	annotations map[string]string,
 ) *batchv1.Job {
-	runAsUser := int64(0)
 
-	args := []string{"-c"}
+	entrypoint := []string{
+		"dumb-init",
+		"--single-child",
+		"--",
+	}
+	command := []string{
+		"/usr/bin/keystone-manage",
+		"db_sync",
+	}
 	if instance.Spec.Debug.DBSync {
-		args = append(args, common.DebugCommand)
-	} else {
-		args = append(args, DBSyncCommand)
+		command = []string{
+			"/bin/sleep",
+			"infinity",
+		}
 	}
 
 	envVars := map[string]env.Setter{}
-	envVars["KOLLA_CONFIG_STRATEGY"] = env.SetValue("COPY_ALWAYS")
-	envVars["KOLLA_BOOTSTRAP"] = env.SetValue("true")
 
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -63,38 +64,33 @@ func DbSyncJob(
 				Spec: corev1.PodSpec{
 					RestartPolicy:      corev1.RestartPolicyOnFailure,
 					ServiceAccountName: instance.RbacResourceName(),
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsNonRoot: ptr.To(true),
+						SeccompProfile: &corev1.SeccompProfile{
+							Type: corev1.SeccompProfileTypeRuntimeDefault,
+						},
+					},
+					Volumes: getVolumes(instance.Name),
 					Containers: []corev1.Container{
 						{
-							Name: ServiceName + "-db-sync",
-							Command: []string{
-								"/bin/bash",
-							},
-							Args:  args,
-							Image: instance.Spec.ContainerImage,
-							SecurityContext: &corev1.SecurityContext{
-								RunAsUser: &runAsUser,
-							},
+							Name:         ServiceName + "-db-sync",
+							Command:      entrypoint,
+							Args:         command,
+							Image:        instance.Spec.ContainerImage,
 							Env:          env.MergeEnvs([]corev1.EnvVar{}, envVars),
 							VolumeMounts: getVolumeMounts(),
+							SecurityContext: &corev1.SecurityContext{
+								AllowPrivilegeEscalation: ptr.To(false),
+								Capabilities: &corev1.Capabilities{
+									Drop: []corev1.Capability{"ALL"},
+								},
+							},
 						},
 					},
 				},
 			},
 		},
 	}
-
-	job.Spec.Template.Spec.Volumes = getVolumes(ServiceName)
-	initContainerDetails := APIDetails{
-		ContainerImage:       instance.Spec.ContainerImage,
-		DatabaseHost:         instance.Status.DatabaseHostname,
-		DatabaseUser:         instance.Spec.DatabaseUser,
-		DatabaseName:         DatabaseName,
-		OSPSecret:            instance.Spec.Secret,
-		DBPasswordSelector:   instance.Spec.PasswordSelectors.Database,
-		UserPasswordSelector: instance.Spec.PasswordSelectors.Admin,
-		VolumeMounts:         getInitVolumeMounts(),
-	}
-	job.Spec.Template.Spec.InitContainers = initContainer(initContainerDetails)
 
 	return job
 }
